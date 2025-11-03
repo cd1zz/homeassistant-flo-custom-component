@@ -1,7 +1,7 @@
 # Flo by Moen (OAuth2 Support)
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
-[![GitHub Release](https://img.shields.io/github/release/cd1zz/flo-custom-component.svg?style=flat-square)](https://github.com/cd1zz/flo-custom-component/releases)
+[![GitHub Release](https://img.shields.io/github/release/cd1zz/homeassistant-flo-custom-component.svg?style=flat-square)](https://github.com/cd1zz/homeassistant-flo-custom-component/releases)
 
 Custom component for Home Assistant that adds **OAuth2 support** for Flo by Moen smart water monitoring and shutoff devices.
 
@@ -33,7 +33,7 @@ Custom component for Home Assistant that adds **OAuth2 support** for Flo by Moen
 1. Open **HACS** in Home Assistant
 2. Click the **3 dots** in the top right
 3. Select **Custom repositories**
-4. Add repository URL: `https://github.com/cd1zz/flo-custom-component`
+4. Add repository URL: `https://github.com/cd1zz/homeassistant-flo-custom-component`
 5. Category: **Integration**
 6. Click **Add**
 7. Click **Install**
@@ -41,7 +41,7 @@ Custom component for Home Assistant that adds **OAuth2 support** for Flo by Moen
 
 ### Manual Installation
 
-1. **Download** the latest release from [releases page](https://github.com/cd1zz/flo-custom-component/releases)
+1. **Download** the latest release from [releases page](https://github.com/cd1zz/homeassistant-flo-custom-component/releases)
 2. **Extract** the `custom_components/flo` folder
 3. **Copy** to your Home Assistant `config/custom_components/` directory:
    ```
@@ -62,7 +62,7 @@ Custom component for Home Assistant that adds **OAuth2 support** for Flo by Moen
 cd /config/custom_components
 
 # Clone the repository
-git clone https://github.com/cd1zz/flo-custom-component.git flo
+git clone https://github.com/cd1zz/homeassistant-flo-custom-component.git flo
 
 # Restart Home Assistant
 ha core restart
@@ -259,8 +259,8 @@ Apache License 2.0 - Same as Home Assistant Core
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/cd1zz/flo-custom-component/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/cd1zz/flo-custom-component/discussions)
+- **Issues**: [GitHub Issues](https://github.com/cd1zz/homeassistant-flo-custom-component/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/cd1zz/homeassistant-flo-custom-component/discussions)
 - **Home Assistant Community**: [Community Forum](https://community.home-assistant.io)
 
 ## Changelog
