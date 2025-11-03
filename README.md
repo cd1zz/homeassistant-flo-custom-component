@@ -5,6 +5,12 @@
 
 Custom component for Home Assistant that adds **OAuth2 support** for Flo by Moen smart water monitoring and shutoff devices.
 
+## Quick Start
+
+1. **Install** via HACS or manual installation (see below)
+2. **Restart** Home Assistant
+3. **Click to add:** [![Add Integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=flo)
+
 ## Why This Custom Component?
 
 **Moen changed their API from simple authentication to OAuth2 in late 2024/early 2025**, breaking the built-in Home Assistant integration. This custom component:
@@ -78,11 +84,18 @@ ha core restart
 
 ### Step 2: Add Custom Integration
 
+**After installing** the custom component and restarting Home Assistant, click this button:
+
+[![Add Integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=flo)
+
+Or manually:
 1. Go to **Settings** → **Devices & Services**
 2. Click **+ Add Integration**
 3. Search for **Flo**
 4. Enter your Moen account credentials
 5. Integration will authenticate using OAuth2
+
+> **Note:** The button above only works after the custom component is installed and Home Assistant has been restarted.
 
 ### Step 3: Verify
 
