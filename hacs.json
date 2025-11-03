@@ -2,5 +2,6 @@
   "name": "Flo by Moen (OAuth2)",
   "render_readme": true,
   "domains": ["flo"],
+  "iot_class": "cloud_polling",
   "homeassistant": "2024.1.0"
 }

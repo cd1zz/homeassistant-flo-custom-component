@@ -2,11 +2,11 @@
   "domain": "flo",
   "name": "Flo",
   "version": "1.0.0",
-  "codeowners": ["@dmulcahey"],
+  "codeowners": ["@cd1zz"],
   "config_flow": true,
   "documentation": "https://github.com/cd1zz/homeassistant-flo-custom-component",
-  "issue_tracker": "https://github.com/cd1zz/homeassistant-flo-custom-component/issues",
+  "integration_type": "hub",
   "iot_class": "cloud_polling",
-  "loggers": [],
+  "issue_tracker": "https://github.com/cd1zz/homeassistant-flo-custom-component/issues",
   "requirements": []
 }
