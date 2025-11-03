@@ -48,8 +48,8 @@ Custom component for Home Assistant that adds **OAuth2 support** for Flo by Moen
 ### Manual Installation
 
 1. **Download** the latest release from [releases page](https://github.com/cd1zz/homeassistant-flo-custom-component/releases)
-2. **Extract** the `custom_components/flo` folder
-3. **Copy** to your Home Assistant `config/custom_components/` directory:
+2. **Create folder** in your Home Assistant: `config/custom_components/flo/`
+3. **Extract all files** from the zip into that folder:
    ```
    config/
    └── custom_components/
@@ -67,7 +67,7 @@ Custom component for Home Assistant that adds **OAuth2 support** for Flo by Moen
 # SSH into Home Assistant (or use VS Code add-on terminal)
 cd /config/custom_components
 
-# Clone the repository
+# Clone the repository (note: files will be in flo/ subfolder)
 git clone https://github.com/cd1zz/homeassistant-flo-custom-component.git flo
 
 # Restart Home Assistant

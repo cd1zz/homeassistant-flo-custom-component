@@ -1,7 +1,6 @@
 {
   "name": "Flo by Moen (OAuth2)",
-  "content_in_root": false,
-  "filename": "flo-custom-component",
+  "content_in_root": true,
   "render_readme": true,
   "domains": ["flo"],
   "homeassistant": "2024.1.0"
