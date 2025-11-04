@@ -158,9 +158,14 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
         return self._device_information["telemetry"]["current"]["humidity"]
 
     @property
-    def consumption_today(self) -> float:
+    def consumption_today(self) -> float | None:
         """Return the current consumption for today in gallons."""
-        return self._water_usage["aggregations"]["sumTotalGallonsConsumed"]
+        if not self._water_usage:
+            return None
+        aggregations = self._water_usage.get("aggregations")
+        if not aggregations:
+            return None
+        return aggregations.get("sumTotalGallonsConsumed")
 
     @property
     def firmware_version(self) -> str:
@@ -250,10 +255,16 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def _update_consumption_data(self, *_) -> None:
         """Update water consumption data from the API."""
+        from .api import FloRequestError
+
         today = dt_util.now().date()
         start_date = datetime(today.year, today.month, today.day, 0, 0)
         end_date = datetime(today.year, today.month, today.day, 23, 59, 59, 999000)
-        self._water_usage = await self.api_client.get_consumption_info(
-            self._flo_location_id, start_date, end_date
-        )
-        LOGGER.debug("Updated Flo consumption data: %s", self._water_usage)
+        try:
+            self._water_usage = await self.api_client.get_consumption_info(
+                self._flo_location_id, start_date, end_date
+            )
+            LOGGER.debug("Updated Flo consumption data: %s", self._water_usage)
+        except FloRequestError as error:
+            LOGGER.warning("Failed to update consumption data: %s", error)
+            self._water_usage = {}

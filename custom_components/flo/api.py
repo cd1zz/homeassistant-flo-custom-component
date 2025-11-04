@@ -211,9 +211,11 @@ class FloAPI:
         params = {
             "startDate": start_date.isoformat(),
             "endDate": end_date.isoformat(),
+            "interval": "1h",
+            "locationId": location_id,
         }
         return await self.request(
-            "get", f"/locations/{location_id}/water/consumption", params=params
+            "get", "/water/consumption", params=params
         )
 
     async def send_presence_ping(self) -> dict[str, Any]:

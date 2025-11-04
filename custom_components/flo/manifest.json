@@ -1,7 +1,7 @@
 {
   "domain": "flo",
   "name": "Flo by Moen (OAuth2)",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "codeowners": ["@cd1zz"],
   "config_flow": true,
   "documentation": "https://github.com/cd1zz/homeassistant-flo-custom-component",
