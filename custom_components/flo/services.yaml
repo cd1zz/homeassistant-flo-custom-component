@@ -7,7 +7,7 @@ set_sleep_mode:
       domain: switch
   fields:
     sleep_minutes:
-      default: true
+      required: true
       selector:
         select:
           options:
@@ -15,7 +15,7 @@ set_sleep_mode:
             - "1440"
             - "4320"
     revert_to_mode:
-      default: true
+      required: true
       selector:
         select:
           options:
