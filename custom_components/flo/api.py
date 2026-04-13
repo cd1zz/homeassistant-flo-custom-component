@@ -172,7 +172,15 @@ class FloAPI:
             async with self._session.request(
                 method, url, headers=headers, **kwargs
             ) as resp:
-                resp.raise_for_status()
+                if not resp.ok:
+                    body = await resp.text()
+                    _LOGGER.error(
+                        "%s %s returned %s: %s",
+                        method.upper(), url, resp.status, body,
+                    )
+                    raise FloRequestError(
+                        f"Request failed: {resp.status} {body}"
+                    )
                 return await resp.json()
 
         except ClientError as err:
@@ -241,7 +249,7 @@ class FloAPI:
             data.update(kwargs)
 
         return await self.request(
-            "post", f"/locations/{location_id}/systemMode", json={"systemMode": data}
+            "post", f"/locations/{location_id}/systemMode", json=data
         )
 
 
