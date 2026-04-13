@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
 
@@ -84,7 +84,7 @@ class FloAPI:
 
                 # Calculate expiration (expires_in is in seconds)
                 expires_in = auth_response["expires_in"]
-                self._token_expiration = datetime.now() + timedelta(seconds=expires_in)
+                self._token_expiration = datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
 
                 _LOGGER.debug(
                     "Authentication successful, token expires in %d seconds", expires_in
@@ -128,7 +128,7 @@ class FloAPI:
                     self._refresh_token = auth_response["refresh_token"]
 
                 expires_in = auth_response["expires_in"]
-                self._token_expiration = datetime.now() + timedelta(seconds=expires_in)
+                self._token_expiration = datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
 
                 _LOGGER.debug("Token refreshed successfully")
 
@@ -144,7 +144,7 @@ class FloAPI:
             return
 
         # Refresh if token expires in less than 5 minutes
-        if datetime.now() >= self._token_expiration - timedelta(minutes=5):
+        if datetime.now(tz=timezone.utc) >= self._token_expiration - timedelta(minutes=5):
             await self.refresh_access_token()
 
     async def request(

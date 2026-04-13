@@ -120,6 +120,8 @@ class FloTemperatureSensor(FloEntity, SensorEntity):
         super().__init__("temperature", device)
         if is_water:
             self._attr_translation_key = "water_temperature"
+        else:
+            self._attr_translation_key = "temperature"
 
     @property
     def native_value(self) -> float | None:
