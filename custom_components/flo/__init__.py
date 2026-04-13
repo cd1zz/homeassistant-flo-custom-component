@@ -1,6 +1,5 @@
 """The flo integration."""
 
-import asyncio
 import logging
 
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
@@ -44,12 +43,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: FloConfigEntry) -> bool:
         for device in location["devices"]
     ]
 
-    try:
-        tasks = [device.async_refresh() for device in devices]
-        await asyncio.gather(*tasks)
-    except FloRequestError as err:
-        _LOGGER.error("Failed to refresh device data: %s", err)
-        raise ConfigEntryNotReady from err
+    for device in devices:
+        await device.async_config_entry_first_refresh()
 
     entry.runtime_data = FloRuntimeData(client=client, devices=devices)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

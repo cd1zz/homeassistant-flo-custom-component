@@ -39,6 +39,9 @@
       "water_pressure": {
         "name": "Water pressure"
       },
+      "temperature": {
+        "name": "Temperature"
+      },
       "water_temperature": {
         "name": "Water temperature"
       }

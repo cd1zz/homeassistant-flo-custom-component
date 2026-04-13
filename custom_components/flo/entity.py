@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
-from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import FloDeviceDataUpdateCoordinator
 
 
-class FloEntity(Entity):
+class FloEntity(CoordinatorEntity[FloDeviceDataUpdateCoordinator]):
     """A base class for Flo entities."""
 
-    _attr_force_update = False
     _attr_has_entity_name = True
-    _attr_should_poll = False
 
     def __init__(
         self,
@@ -23,8 +21,8 @@ class FloEntity(Entity):
         **kwargs,
     ) -> None:
         """Init Flo entity."""
+        super().__init__(device)
         self._attr_unique_id = f"{device.mac_address}_{entity_type}"
-
         self._device: FloDeviceDataUpdateCoordinator = device
 
     @property
@@ -43,12 +41,4 @@ class FloEntity(Entity):
     @property
     def available(self) -> bool:
         """Return True if device is available."""
-        return self._device.available
-
-    async def async_update(self) -> None:
-        """Update Flo entity."""
-        await self._device.async_request_refresh()
-
-    async def async_added_to_hass(self) -> None:
-        """When entity is added to hass."""
-        self.async_on_remove(self._device.async_add_listener(self.async_write_ha_state))
+        return super().available and self._device.available

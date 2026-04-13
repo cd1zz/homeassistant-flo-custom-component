@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, TYPE_CHECKING
 
 from orjson import JSONDecodeError
@@ -34,7 +34,6 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
     """Flo device object."""
 
     config_entry: ConfigEntry
-    _failure_count: int = 0
 
     def __init__(
         self,
@@ -60,20 +59,31 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=60),
         )
 
+    def _get_device_value(self, *keys: str, default: Any = None) -> Any:
+        """Safely traverse nested dict keys in device information."""
+        data: Any = self._device_information
+        for key in keys:
+            if not isinstance(data, dict):
+                return default
+            data = data.get(key)
+            if data is None:
+                return default
+        return data
+
     async def _async_update_data(self):
         """Update data via library."""
         from .api import FloRequestError
 
         try:
             async with asyncio.timeout(20):
-                await self.send_presence_ping()
+                try:
+                    await self.send_presence_ping()
+                except (FloRequestError, TimeoutError) as err:
+                    LOGGER.debug("Presence ping failed (non-critical): %s", err)
                 await self._update_device()
                 await self._update_consumption_data()
-                self._failure_count = 0
         except (FloRequestError, TimeoutError, JSONDecodeError) as error:
-            self._failure_count += 1
-            if self._failure_count > 3:
-                raise UpdateFailed(error) from error
+            raise UpdateFailed(error) from error
 
     @property
     def location_id(self) -> str:
@@ -100,62 +110,62 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
     @property
     def mac_address(self) -> str:
         """Return ieee address for device."""
-        return self._device_information["macAddress"]
+        return self._get_device_value("macAddress", default="")
 
     @property
     def model(self) -> str:
         """Return model for device."""
-        return self._device_information["deviceModel"]
+        return self._get_device_value("deviceModel", default="Unknown")
 
     @property
-    def rssi(self) -> float:
+    def rssi(self) -> float | None:
         """Return rssi for device."""
-        return self._device_information["connectivity"]["rssi"]
+        return self._get_device_value("connectivity", "rssi")
 
     @property
-    def last_heard_from_time(self) -> str:
+    def last_heard_from_time(self) -> str | None:
         """Return lastHeardFromTime for device."""
-        return self._device_information["lastHeardFromTime"]
+        return self._get_device_value("lastHeardFromTime")
 
     @property
     def device_type(self) -> str:
         """Return the device type for the device."""
-        return self._device_information["deviceType"]
+        return self._get_device_value("deviceType", default="")
 
     @property
     def available(self) -> bool:
         """Return True if device is available."""
-        return self.last_update_success and self._device_information["isConnected"]
+        return self.last_update_success and self._get_device_value("isConnected", default=False)
 
     @property
-    def current_system_mode(self) -> str:
+    def current_system_mode(self) -> str | None:
         """Return the current system mode."""
-        return self._device_information["systemMode"]["lastKnown"]
+        return self._get_device_value("systemMode", "lastKnown")
 
     @property
-    def target_system_mode(self) -> str:
+    def target_system_mode(self) -> str | None:
         """Return the target system mode."""
-        return self._device_information["systemMode"]["target"]
+        return self._get_device_value("systemMode", "target")
 
     @property
-    def current_flow_rate(self) -> float:
+    def current_flow_rate(self) -> float | None:
         """Return current flow rate in gpm."""
-        return self._device_information["telemetry"]["current"]["gpm"]
+        return self._get_device_value("telemetry", "current", "gpm")
 
     @property
-    def current_psi(self) -> float:
+    def current_psi(self) -> float | None:
         """Return the current pressure in psi."""
-        return self._device_information["telemetry"]["current"]["psi"]
+        return self._get_device_value("telemetry", "current", "psi")
 
     @property
-    def temperature(self) -> float:
+    def temperature(self) -> float | None:
         """Return the current temperature in degrees F."""
-        return self._device_information["telemetry"]["current"]["tempF"]
+        return self._get_device_value("telemetry", "current", "tempF")
 
     @property
-    def humidity(self) -> float:
+    def humidity(self) -> float | None:
         """Return the current humidity in percent (0-100)."""
-        return self._device_information["telemetry"]["current"]["humidity"]
+        return self._get_device_value("telemetry", "current", "humidity")
 
     @property
     def consumption_today(self) -> float | None:
@@ -168,29 +178,29 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
         return aggregations.get("sumTotalGallonsConsumed")
 
     @property
-    def firmware_version(self) -> str:
+    def firmware_version(self) -> str | None:
         """Return the firmware version for the device."""
-        return self._device_information["fwVersion"]
+        return self._get_device_value("fwVersion")
 
     @property
     def serial_number(self) -> str | None:
         """Return the serial number for the device."""
-        return self._device_information.get("serialNumber")
+        return self._get_device_value("serialNumber")
 
     @property
     def pending_info_alerts_count(self) -> int:
         """Return the number of pending info alerts for the device."""
-        return self._device_information["notifications"]["pending"]["infoCount"]
+        return self._get_device_value("notifications", "pending", "infoCount", default=0)
 
     @property
     def pending_warning_alerts_count(self) -> int:
         """Return the number of pending warning alerts for the device."""
-        return self._device_information["notifications"]["pending"]["warningCount"]
+        return self._get_device_value("notifications", "pending", "warningCount", default=0)
 
     @property
     def pending_critical_alerts_count(self) -> int:
         """Return the number of pending critical alerts for the device."""
-        return self._device_information["notifications"]["pending"]["criticalCount"]
+        return self._get_device_value("notifications", "pending", "criticalCount", default=0)
 
     @property
     def has_alerts(self) -> bool:
@@ -204,22 +214,22 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
     @property
     def water_detected(self) -> bool:
         """Return whether water is detected, for leak detectors."""
-        return self._device_information["fwProperties"]["telemetry_water"]
+        return self._get_device_value("fwProperties", "telemetry_water", default=False)
 
     @property
-    def last_known_valve_state(self) -> str:
+    def last_known_valve_state(self) -> str | None:
         """Return the last known valve state for the device."""
-        return self._device_information["valve"]["lastKnown"]
+        return self._get_device_value("valve", "lastKnown")
 
     @property
-    def target_valve_state(self) -> str:
+    def target_valve_state(self) -> str | None:
         """Return the target valve state for the device."""
-        return self._device_information["valve"]["target"]
+        return self._get_device_value("valve", "target")
 
     @property
-    def battery_level(self) -> float:
+    def battery_level(self) -> float | None:
         """Return the battery level for battery-powered device, e.g. leak detectors."""
-        return self._device_information["battery"]["level"]
+        return self._get_device_value("battery", "level")
 
     async def send_presence_ping(self):
         """Send Flo a presence ping."""
@@ -257,9 +267,9 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
         """Update water consumption data from the API."""
         from .api import FloRequestError
 
-        today = dt_util.now().date()
-        start_date = datetime(today.year, today.month, today.day, 0, 0)
-        end_date = datetime(today.year, today.month, today.day, 23, 59, 59, 999000)
+        now = dt_util.now()
+        start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = now.replace(hour=23, minute=59, second=59, microsecond=999000)
         try:
             self._water_usage = await self.api_client.get_consumption_info(
                 self._flo_location_id, start_date, end_date

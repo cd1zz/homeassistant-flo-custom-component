@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import FLO_AWAY, FLO_HOME, FLO_SLEEP
+from .const import FLO_AWAY, FLO_HOME
 from .coordinator import FloConfigEntry, FloDeviceDataUpdateCoordinator
 from .entity import FloEntity
 
@@ -82,23 +82,20 @@ class FloSwitch(FloEntity, SwitchEntity):
         await self._device.api_client.set_valve_state(self._device.id, "open")
         self._attr_is_on = True
         self.async_write_ha_state()
+        await self._device.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Close the valve."""
         await self._device.api_client.set_valve_state(self._device.id, "closed")
         self._attr_is_on = False
         self.async_write_ha_state()
+        await self._device.async_request_refresh()
 
     @callback
-    def async_update_state(self) -> None:
-        """Retrieve the latest valve state and update the state machine."""
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
         self._attr_is_on = self._device.last_known_valve_state == "open"
-        self.async_write_ha_state()
-
-    async def async_added_to_hass(self) -> None:
-        """When entity is added to hass."""
-        await super().async_added_to_hass()
-        self.async_on_remove(self._device.async_add_listener(self.async_update_state))
+        super()._handle_coordinator_update()
 
     async def async_set_mode_home(self):
         """Set the Flo location to home mode."""
