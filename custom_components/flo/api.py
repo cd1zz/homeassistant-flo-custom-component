@@ -217,6 +217,11 @@ class FloAPI:
                     raise FloRequestError(
                         f"Request failed: {resp.status} {body}"
                     )
+                # Mode-change endpoints (e.g. POST /locations/{id}/systemMode)
+                # return 204 with an empty body — resp.json() would raise
+                # "unexpected mimetype" even though the call succeeded.
+                if resp.status == 204 or resp.content_length == 0:
+                    return {}
                 return await resp.json()
 
         except ClientError as err:
