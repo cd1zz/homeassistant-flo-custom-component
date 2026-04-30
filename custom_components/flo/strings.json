@@ -1,7 +1,8 @@
 {
   "config": {
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
+      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]"
     },
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
@@ -13,6 +14,12 @@
         "data": {
           "password": "[%key:common::config_flow::data::password%]",
           "username": "[%key:common::config_flow::data::username%]"
+        }
+      },
+      "reauth_confirm": {
+        "description": "Re-enter the password for your Flo account: {username}",
+        "data": {
+          "password": "[%key:common::config_flow::data::password%]"
         }
       }
     }
