@@ -1,16 +1,30 @@
-"""Flo device object."""
+"""Flo coordinators.
+
+A single :class:`FloLocationDataUpdateCoordinator` polls every 60s per Flo
+location and fetches *presence*, *consumption*, and *all device states* in one
+batch. Each device is then represented by a passive
+:class:`FloDeviceDataUpdateCoordinator` that subscribes to the location
+coordinator and exposes the same property API the entity layer already
+consumes — so the change is transparent to ``entity.py``, ``sensor.py``,
+``binary_sensor.py``, and ``switch.py``.
+
+This replaces the previous design where every device owned its own polling
+``DataUpdateCoordinator``. With N devices that pattern produced ~3·N+1
+requests per minute against api-gw.meetflo.com (a stampede that hit Moen's
+rate limits for users with many leak detectors).
+"""
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
+from json import JSONDecodeError
 from typing import Any, TYPE_CHECKING
 
-from orjson import JSONDecodeError
-
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -28,10 +42,19 @@ class FloRuntimeData:
 
     client: FloAPI
     devices: list[FloDeviceDataUpdateCoordinator]
+    locations: list[FloLocationDataUpdateCoordinator] = field(default_factory=list)
 
 
-class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
-    """Flo device object."""
+class FloLocationDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """Single coordinator per Flo location.
+
+    Polls once per minute and stores::
+
+        {
+            "devices": {device_id: device_info_dict, ...},
+            "consumption": {...},
+        }
+    """
 
     config_entry: ConfigEntry
 
@@ -41,23 +64,189 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
         config_entry: ConfigEntry,
         api_client: FloAPI,
         location_id: str,
-        device_id: str,
+        device_ids: list[str],
     ) -> None:
-        """Initialize the device."""
-        self.hass: HomeAssistant = hass
+        """Initialize the location coordinator."""
         self.api_client: FloAPI = api_client
         self._flo_location_id: str = location_id
+        self._device_ids: list[str] = list(device_ids)
+        super().__init__(
+            hass,
+            LOGGER,
+            config_entry=config_entry,
+            name=f"{DOMAIN}-location-{location_id}",
+            update_interval=timedelta(seconds=60),
+        )
+
+    @property
+    def location_id(self) -> str:
+        """Return Flo location id."""
+        return self._flo_location_id
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Fetch presence ping, consumption, and all device states in one batch."""
+        from .api import FloAuthError, FloRequestError
+
+        try:
+            async with asyncio.timeout(30):
+                presence_task = self._safe_presence()
+                consumption_task = self._safe_consumption()
+                device_tasks = [
+                    self.api_client.get_device_info(device_id)
+                    for device_id in self._device_ids
+                ]
+                results = await asyncio.gather(
+                    presence_task,
+                    consumption_task,
+                    *device_tasks,
+                    return_exceptions=True,
+                )
+        except FloAuthError as err:
+            raise ConfigEntryAuthFailed(err) from err
+        except (FloRequestError, TimeoutError, JSONDecodeError) as err:
+            raise UpdateFailed(err) from err
+
+        presence_res, consumption_res, *device_results = results
+
+        if isinstance(presence_res, FloAuthError):
+            raise ConfigEntryAuthFailed(presence_res) from presence_res
+
+        if isinstance(consumption_res, FloAuthError):
+            raise ConfigEntryAuthFailed(consumption_res) from consumption_res
+        consumption = consumption_res if isinstance(consumption_res, dict) else {}
+        if isinstance(consumption_res, Exception):
+            LOGGER.warning("Consumption fetch failed: %s", consumption_res)
+
+        devices: dict[str, dict[str, Any]] = {}
+        prior_devices = (self.data or {}).get("devices", {})
+        for device_id, res in zip(self._device_ids, device_results, strict=True):
+            if isinstance(res, FloAuthError):
+                raise ConfigEntryAuthFailed(res) from res
+            if isinstance(res, Exception):
+                LOGGER.warning("Device %s fetch failed: %s", device_id, res)
+                devices[device_id] = prior_devices.get(device_id, {})
+                continue
+            devices[device_id] = res
+
+        # If *every* device fetch failed and we have no prior data, treat as
+        # an UpdateFailed so HA marks entities unavailable instead of cheerful.
+        any_fresh = any(
+            not isinstance(r, Exception) for r in device_results
+        )
+        if not any_fresh and not prior_devices:
+            raise UpdateFailed("All device fetches failed")
+
+        return {"devices": devices, "consumption": consumption}
+
+    async def _safe_presence(self) -> Any:
+        """Send presence ping; swallow non-auth errors (it's best-effort)."""
+        from .api import FloAuthError, FloRequestError
+
+        try:
+            return await self.api_client.send_presence_ping()
+        except FloAuthError:
+            raise
+        except (FloRequestError, TimeoutError) as err:
+            LOGGER.debug("Presence ping failed (non-critical): %s", err)
+            return err
+
+    async def _safe_consumption(self) -> Any:
+        """Fetch today's consumption; let auth errors bubble up."""
+        from .api import FloAuthError, FloRequestError
+
+        now = dt_util.now()
+        start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = now.replace(hour=23, minute=59, second=59, microsecond=999000)
+        try:
+            return await self.api_client.get_consumption_info(
+                self._flo_location_id, start_date, end_date
+            )
+        except FloAuthError:
+            raise
+        except (FloRequestError, TimeoutError) as err:
+            return err
+
+
+class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
+    """Passive per-device proxy onto a location coordinator.
+
+    Does not poll. Subscribes to its parent
+    :class:`FloLocationDataUpdateCoordinator` and re-emits updates to entity
+    listeners with the device's slice of the batched data.
+    """
+
+    config_entry: ConfigEntry
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        location_coordinator: FloLocationDataUpdateCoordinator,
+        device_id: str,
+    ) -> None:
+        """Initialize the device coordinator."""
+        self.api_client: FloAPI = location_coordinator.api_client
+        self._location_coordinator: FloLocationDataUpdateCoordinator = (
+            location_coordinator
+        )
+        self._flo_location_id: str = location_coordinator.location_id
         self._flo_device_id: str = device_id
         self._manufacturer: str = "Flo by Moen"
-        self._device_information: dict[str, Any] = {}
-        self._water_usage: dict[str, Any] = {}
         super().__init__(
             hass,
             LOGGER,
             config_entry=config_entry,
             name=f"{DOMAIN}-{device_id}",
-            update_interval=timedelta(seconds=60),
+            update_interval=None,
         )
+        self._unsub_parent = location_coordinator.async_add_listener(
+            self._handle_location_update
+        )
+
+    @callback
+    def _handle_location_update(self) -> None:
+        """Mirror the location coordinator's success/failure state to listeners."""
+        parent = self._location_coordinator
+        if parent.last_update_success:
+            self.async_set_updated_data(self._device_information)
+        else:
+            self.last_update_success = False
+            self.last_exception = parent.last_exception
+            self.async_update_listeners()
+
+    async def async_config_entry_first_refresh(self) -> None:
+        """No independent refresh — the location coordinator did it."""
+        if self._location_coordinator.last_update_success:
+            self.data = self._device_information
+
+    async def async_request_refresh(self) -> None:
+        """Bubble up to the location coordinator."""
+        await self._location_coordinator.async_request_refresh()
+
+    async def async_shutdown(self) -> None:
+        """Detach from parent and shut down."""
+        if self._unsub_parent is not None:
+            self._unsub_parent()
+            self._unsub_parent = None
+        await super().async_shutdown()
+
+    @property
+    def _device_information(self) -> dict[str, Any]:
+        """Return this device's slice of the location coordinator data."""
+        if not self._location_coordinator.data:
+            return {}
+        return (
+            self._location_coordinator.data.get("devices", {}).get(
+                self._flo_device_id, {}
+            )
+        )
+
+    @property
+    def _water_usage(self) -> dict[str, Any]:
+        """Return the current consumption payload from the location coordinator."""
+        if not self._location_coordinator.data:
+            return {}
+        return self._location_coordinator.data.get("consumption", {}) or {}
 
     def _get_device_value(self, *keys: str, default: Any = None) -> Any:
         """Safely traverse nested dict keys in device information."""
@@ -69,21 +258,6 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
             if data is None:
                 return default
         return data
-
-    async def _async_update_data(self):
-        """Update data via library."""
-        from .api import FloRequestError
-
-        try:
-            async with asyncio.timeout(20):
-                try:
-                    await self.send_presence_ping()
-                except (FloRequestError, TimeoutError) as err:
-                    LOGGER.debug("Presence ping failed (non-critical): %s", err)
-                await self._update_device()
-                await self._update_consumption_data()
-        except (FloRequestError, TimeoutError, JSONDecodeError) as error:
-            raise UpdateFailed(error) from error
 
     @property
     def location_id(self) -> str:
@@ -109,7 +283,7 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
 
     @property
     def mac_address(self) -> str:
-        """Return ieee address for device."""
+        """Return MAC address for device (empty string when not yet known)."""
         return self._get_device_value("macAddress", default="")
 
     @property
@@ -135,7 +309,10 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
     @property
     def available(self) -> bool:
         """Return True if device is available."""
-        return self.last_update_success and self._get_device_value("isConnected", default=False)
+        return (
+            self._location_coordinator.last_update_success
+            and self._get_device_value("isConnected", default=False)
+        )
 
     @property
     def current_system_mode(self) -> str | None:
@@ -169,7 +346,7 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
 
     @property
     def consumption_today(self) -> float | None:
-        """Return the current consumption for today in gallons."""
+        """Return today's consumption in gallons (location-wide)."""
         if not self._water_usage:
             return None
         aggregations = self._water_usage.get("aggregations")
@@ -195,12 +372,16 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
     @property
     def pending_warning_alerts_count(self) -> int:
         """Return the number of pending warning alerts for the device."""
-        return self._get_device_value("notifications", "pending", "warningCount", default=0)
+        return self._get_device_value(
+            "notifications", "pending", "warningCount", default=0
+        )
 
     @property
     def pending_critical_alerts_count(self) -> int:
         """Return the number of pending critical alerts for the device."""
-        return self._get_device_value("notifications", "pending", "criticalCount", default=0)
+        return self._get_device_value(
+            "notifications", "pending", "criticalCount", default=0
+        )
 
     @property
     def has_alerts(self) -> bool:
@@ -231,19 +412,19 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
         """Return the battery level for battery-powered device, e.g. leak detectors."""
         return self._get_device_value("battery", "level")
 
-    async def send_presence_ping(self):
-        """Send Flo a presence ping."""
-        await self.api_client.send_presence_ping()
-
-    async def async_set_mode_home(self):
+    async def async_set_mode_home(self) -> None:
         """Set the Flo location to home mode."""
         await self.api_client.set_location_mode(self._flo_location_id, "home")
+        await self._location_coordinator.async_request_refresh()
 
-    async def async_set_mode_away(self):
+    async def async_set_mode_away(self) -> None:
         """Set the Flo location to away mode."""
         await self.api_client.set_location_mode(self._flo_location_id, "away")
+        await self._location_coordinator.async_request_refresh()
 
-    async def async_set_mode_sleep(self, sleep_minutes, revert_to_mode):
+    async def async_set_mode_sleep(
+        self, sleep_minutes: int, revert_to_mode: str
+    ) -> None:
         """Set the Flo location to sleep mode."""
         await self.api_client.set_location_mode(
             self._flo_location_id,
@@ -251,30 +432,8 @@ class FloDeviceDataUpdateCoordinator(DataUpdateCoordinator):
             revertMinutes=sleep_minutes,
             revertMode=revert_to_mode,
         )
+        await self._location_coordinator.async_request_refresh()
 
-    async def async_run_health_test(self):
+    async def async_run_health_test(self) -> None:
         """Run a Flo device health test."""
         await self.api_client.run_health_test(self._flo_device_id)
-
-    async def _update_device(self, *_) -> None:
-        """Update the device information from the API."""
-        self._device_information = await self.api_client.get_device_info(
-            self._flo_device_id
-        )
-        LOGGER.debug("Flo device data: %s", self._device_information)
-
-    async def _update_consumption_data(self, *_) -> None:
-        """Update water consumption data from the API."""
-        from .api import FloRequestError
-
-        now = dt_util.now()
-        start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = now.replace(hour=23, minute=59, second=59, microsecond=999000)
-        try:
-            self._water_usage = await self.api_client.get_consumption_info(
-                self._flo_location_id, start_date, end_date
-            )
-            LOGGER.debug("Updated Flo consumption data: %s", self._water_usage)
-        except FloRequestError as error:
-            LOGGER.warning("Failed to update consumption data: %s", error)
-            self._water_usage = {}

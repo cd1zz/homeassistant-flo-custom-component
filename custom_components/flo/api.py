@@ -132,9 +132,11 @@ class FloAPI:
 
                 _LOGGER.debug("Token refreshed successfully")
 
-        except ClientError as err:
-            _LOGGER.error("Token refresh failed: %s, re-authenticating", err)
-            # If refresh fails, try full authentication
+        except (ClientError, KeyError) as err:
+            _LOGGER.warning("Token refresh failed (%s); re-authenticating", err)
+            # If refresh fails (revoked refresh token, malformed response, ...),
+            # fall back to a full re-auth. Let any FloAuthError propagate so the
+            # coordinator can surface it as ConfigEntryAuthFailed.
             await self.authenticate()
 
     async def _ensure_token_valid(self) -> None:
@@ -153,17 +155,30 @@ class FloAPI:
         path: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Make an authenticated API request."""
+        """Make an authenticated API request.
+
+        On 401 we transparently refresh the token (or fully re-authenticate if
+        the refresh token is also bad) and retry the request once. Persistent
+        401s are raised as :class:`FloAuthError` so the coordinator can surface
+        a reauth flow to the user.
+        """
+        return await self._request_with_retry(method, path, _retry=True, **kwargs)
+
+    async def _request_with_retry(
+        self,
+        method: str,
+        path: str,
+        *,
+        _retry: bool,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         await self._ensure_token_valid()
 
-        # Build full URL
         url = f"{API_V2_BASE}{path}" if path.startswith("/") else path
 
-        # Set authorization header with Bearer token
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self._access_token}"
 
-        # Set default timeout if not specified
         if "timeout" not in kwargs:
             kwargs["timeout"] = ClientTimeout(total=20)
 
@@ -172,11 +187,32 @@ class FloAPI:
             async with self._session.request(
                 method, url, headers=headers, **kwargs
             ) as resp:
+                if resp.status == 401 and _retry:
+                    body = await resp.text()
+                    _LOGGER.info(
+                        "%s %s returned 401; refreshing credentials and retrying",
+                        method.upper(),
+                        url,
+                    )
+                    _LOGGER.debug("401 body: %s", body)
+                    self._access_token = None
+                    await self._ensure_token_valid()
+                    return await self._request_with_retry(
+                        method, path, _retry=False, **kwargs
+                    )
+                if resp.status == 401:
+                    body = await resp.text()
+                    raise FloAuthError(
+                        f"Authentication rejected: {resp.status} {body}"
+                    )
                 if not resp.ok:
                     body = await resp.text()
                     _LOGGER.error(
                         "%s %s returned %s: %s",
-                        method.upper(), url, resp.status, body,
+                        method.upper(),
+                        url,
+                        resp.status,
+                        body,
                     )
                     raise FloRequestError(
                         f"Request failed: {resp.status} {body}"

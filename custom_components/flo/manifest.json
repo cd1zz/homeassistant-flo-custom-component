@@ -1,12 +1,13 @@
 {
   "domain": "flo",
   "name": "Flo by Moen (OAuth2)",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "codeowners": ["@cd1zz"],
   "config_flow": true,
   "documentation": "https://github.com/cd1zz/homeassistant-flo-custom-component",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/cd1zz/homeassistant-flo-custom-component/issues",
-  "requirements": ["orjson"]
+  "loggers": ["custom_components.flo"],
+  "requirements": []
 }

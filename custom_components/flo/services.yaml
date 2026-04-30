@@ -8,14 +8,25 @@ set_sleep_mode:
   fields:
     sleep_minutes:
       required: true
+      default: 120
       selector:
         select:
           options:
+            - "60"
             - "120"
-            - "1440"
-            - "4320"
+            - "180"
+            - "240"
+            - "300"
+            - "360"
+            - "420"
+            - "480"
+            - "540"
+            - "600"
+            - "660"
+            - "720"
     revert_to_mode:
       required: true
+      default: "home"
       selector:
         select:
           options:

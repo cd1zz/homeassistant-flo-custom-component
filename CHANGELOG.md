@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-04-30
+
+### Added
+- **Reauthentication flow**: when the Flo API returns a persistent 401 (e.g.,
+  refresh token revoked because the user changed their Moen password),
+  Home Assistant now prompts for the new password instead of leaving entities
+  "unavailable" forever until restart. Implemented via the standard
+  `async_step_reauth` / `async_step_reauth_confirm` config-flow steps.
+
+### Changed
+- **Coordinator architecture**: replaced per-device polling coordinators with a
+  single `FloLocationDataUpdateCoordinator` per location. Each cycle now issues
+  one `presence/me`, one `water/consumption`, and N parallel `devices/{id}`
+  requests instead of `1 + 3·N` serialized-then-stampeded requests. For a
+  household with 13 leak detectors + 1 shutoff this drops Moen API traffic
+  from ~60,000 requests/day to ~22,000 and removes the per-minute burst that
+  could trip rate limits.
+- Per-device coordinators are now passive proxies that subscribe to the
+  location coordinator. Public properties unchanged — entity layer is untouched.
+
+### Fixed
+- **services.yaml**: `set_sleep_mode` UI options (`120/1440/4320`) no longer
+  contradict the voluptuous schema (`60..720` step 60). Selecting a value from
+  the UI now actually validates.
+- **entity.py**: when Moen omits `macAddress` (e.g., unprovisioned device), the
+  `unique_id` falls back to `{device.id}_{entity_type}` instead of producing
+  collision-prone `_<entity_type>` ids. `DeviceInfo.connections` is omitted
+  rather than emitting an empty `(mac, "")` tuple that could merge unrelated
+  devices in the device registry.
+- **api.py**: 401 responses on regular requests now trigger a token refresh
+  and one retry; persistent 401s raise `FloAuthError` so the coordinator can
+  prompt the user to reauthenticate (previously silently became "unavailable"
+  forever until HA restart).
+- **api.py**: token-refresh `KeyError` on a malformed Moen response now falls
+  through to a full re-auth instead of crashing the coordinator.
+- **__init__.py**: `async_unload_entry` now shuts down all coordinators, so
+  reload no longer leaks listeners or background tasks.
+- **__init__.py**: first-refresh runs concurrently across locations.
+
+### Removed
+- `orjson` listed as a manifest requirement (it ships with HA Core; the
+  refresh-failure stack trace now uses stdlib `json.JSONDecodeError`).
+
 ## [1.0.0] - 2025-11-03
 
 ### Added

@@ -18,18 +18,20 @@ class FloEntity(CoordinatorEntity[FloDeviceDataUpdateCoordinator]):
         self,
         entity_type: str,
         device: FloDeviceDataUpdateCoordinator,
-        **kwargs,
     ) -> None:
         """Init Flo entity."""
         super().__init__(device)
-        self._attr_unique_id = f"{device.mac_address}_{entity_type}"
+        # Prefer MAC for stable unique_id; fall back to Flo device id when the
+        # API hasn't reported a MAC (avoids `_<entity_type>` collisions across
+        # multiple unprovisioned devices).
+        identifier = device.mac_address or device.id
+        self._attr_unique_id = f"{identifier}_{entity_type}"
         self._device: FloDeviceDataUpdateCoordinator = device
 
     @property
     def device_info(self) -> DeviceInfo:
         """Return a device description for device registry."""
-        return DeviceInfo(
-            connections={(CONNECTION_NETWORK_MAC, self._device.mac_address)},
+        info = DeviceInfo(
             identifiers={(DOMAIN, self._device.id)},
             serial_number=self._device.serial_number,
             manufacturer=self._device.manufacturer,
@@ -37,6 +39,11 @@ class FloEntity(CoordinatorEntity[FloDeviceDataUpdateCoordinator]):
             name=self._device.device_name.capitalize(),
             sw_version=self._device.firmware_version,
         )
+        if self._device.mac_address:
+            info["connections"] = {
+                (CONNECTION_NETWORK_MAC, self._device.mac_address)
+            }
+        return info
 
     @property
     def available(self) -> bool:
