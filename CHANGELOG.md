@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-08-12
+
+### Fixed
+- **switch.py**: the shutoff-valve switch no longer briefly flips back to its
+  previous state after toggling. `set_valve_state` updates `valve.target`
+  instantly, but `valve.lastKnown` (the device's last-reported physical state)
+  lags by up to one 60 second poll cycle. The switch derived its state from
+  `lastKnown`, so the immediate post-command refresh read the stale value and
+  reverted the optimistic state until the next poll completed. Now, the switch
+  prefers `valve.target` when it is a known state, falling back to `lastKnown`.
+  (#6, thanks @TheLVSQ)
+
 ## [1.2.0] - 2026-08-10
 
 ### Changed
