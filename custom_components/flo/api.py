@@ -1,4 +1,15 @@
-"""Flo API client with OAuth2 support."""
+"""Flo API client.
+
+Moen migrated Flo accounts onto the "Smart Water" gateway
+(``api.prod.iot.moen.com``), which is backed by AWS Cognito. The old
+``api-gw.meetflo.com`` password grant no longer authenticates migrated
+accounts, so we now log in against the Moen gateway. The gateway issues a
+Bearer token that the *legacy* Flo v2 API still accepts, so only the
+authentication step changed — the data and control endpoints are unchanged.
+
+Credentials and the flow were extracted from the Moen Android app
+(package ``com.moen.smartwater``, v3.56.x).
+"""
 
 from __future__ import annotations
 
@@ -14,14 +25,20 @@ from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
-# Moen Flo OAuth2 credentials (extracted from mobile app)
-CLIENT_ID = "3baec26f-0e8b-4e1d-84b0-e178f05ea0a5"
-CLIENT_SECRET = "3baec26f-0e8b-4e1d-84b0-e178f05ea0a5"
+# Moen "Smart Water" gateway login (extracted from the Moen app). The app
+# posts username/password with this odd ``grant_type`` to the Cognito-backed
+# gateway and gets back a Bearer token it then uses against the Flo API too.
+MOEN_TOKEN_URL = "https://api.prod.iot.moen.com/v1/oauth2/token"
+MOEN_CLIENT_ID = "6qn9pep31dglq6ed4fvlq6rp5t"
+MOEN_GRANT_TYPE = "client_credentials"
 
-# API endpoints
+# Flo data/control API. Still live and unchanged; it accepts the Moen token.
 API_BASE = "https://api-gw.meetflo.com/api"
-API_V1_BASE = f"{API_BASE}/v1"
 API_V2_BASE = f"{API_BASE}/v2"
+
+# The Moen app sends this on the Flo endpoints; some reject a missing/unknown
+# User-Agent, so we mirror it on every Flo request.
+USER_AGENT = "Flo-Android"
 
 
 class FloAuthError(HomeAssistantError):
@@ -57,21 +74,34 @@ class FloAPI:
             raise FloAuthError("Not authenticated")
         return self._user_id
 
+    @staticmethod
+    def _expiry_from(auth_response: dict[str, Any]) -> datetime:
+        """Return the token expiry, tolerating ``expires_in`` as str or int."""
+        try:
+            expires_in = int(auth_response.get("expires_in", 3600))
+        except (TypeError, ValueError):
+            expires_in = 3600
+        return datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
+
     async def authenticate(self) -> None:
-        """Authenticate with the Flo API using OAuth2 password grant."""
-        _LOGGER.debug("Authenticating with Flo API using OAuth2")
+        """Authenticate with the Moen gateway and resolve the Flo user id.
+
+        Exchanges the username/password for a Bearer token at the Moen gateway,
+        then looks up the Flo user id (the token no longer carries it) so the
+        rest of the client can keep calling the unchanged Flo v2 endpoints.
+        """
+        _LOGGER.debug("Authenticating with the Moen gateway")
 
         data = {
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "grant_type": "password",
             "username": self._username,
             "password": self._password,
+            "grant_type": MOEN_GRANT_TYPE,
+            "client_id": MOEN_CLIENT_ID,
         }
 
         try:
             async with self._session.post(
-                f"{API_V1_BASE}/oauth2/token",
+                MOEN_TOKEN_URL,
                 json=data,
                 timeout=ClientTimeout(total=10),
             ) as resp:
@@ -79,16 +109,8 @@ class FloAPI:
                 auth_response = await resp.json()
 
                 self._access_token = auth_response["access_token"]
-                self._refresh_token = auth_response["refresh_token"]
-                self._user_id = auth_response["user_id"]
-
-                # Calculate expiration (expires_in is in seconds)
-                expires_in = auth_response["expires_in"]
-                self._token_expiration = datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
-
-                _LOGGER.debug(
-                    "Authentication successful, token expires in %d seconds", expires_in
-                )
+                self._refresh_token = auth_response.get("refresh_token")
+                self._token_expiration = self._expiry_from(auth_response)
 
         except ClientError as err:
             _LOGGER.error("Authentication failed: %s", err)
@@ -96,6 +118,32 @@ class FloAPI:
         except KeyError as err:
             _LOGGER.error("Invalid authentication response: %s", err)
             raise FloAuthError(f"Invalid authentication response: {err}") from err
+
+        await self._resolve_user_id()
+        _LOGGER.debug("Authentication successful for Flo user %s", self._user_id)
+
+    async def _resolve_user_id(self) -> None:
+        """Resolve the Flo user id from the account email.
+
+        Mirrors the Moen app's ``getUserDetails(email)`` call. Uses a
+        non-retrying request so a rejected token surfaces as an auth error
+        instead of recursing back into :meth:`authenticate`.
+        """
+        try:
+            resp = await self._request_with_retry(
+                "get", "/users", _retry=False, params={"email": self._username}
+            )
+        except FloRequestError as err:
+            raise FloAuthError(f"Could not resolve Flo user id: {err}") from err
+
+        if isinstance(resp, list):
+            user = resp[0] if resp else None
+        else:
+            user = resp
+        user_id = user.get("id") if isinstance(user, dict) else None
+        if not user_id:
+            raise FloAuthError("Could not resolve Flo user id from account email")
+        self._user_id = user_id
 
     async def refresh_access_token(self) -> None:
         """Refresh the access token using the refresh token."""
@@ -107,15 +155,14 @@ class FloAPI:
         _LOGGER.debug("Refreshing access token")
 
         data = {
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
             "grant_type": "refresh_token",
+            "client_id": MOEN_CLIENT_ID,
             "refresh_token": self._refresh_token,
         }
 
         try:
             async with self._session.post(
-                f"{API_V1_BASE}/oauth2/token",
+                MOEN_TOKEN_URL,
                 json=data,
                 timeout=ClientTimeout(total=10),
             ) as resp:
@@ -124,11 +171,10 @@ class FloAPI:
 
                 self._access_token = auth_response["access_token"]
                 # Refresh token might be rotated
-                if "refresh_token" in auth_response:
+                if auth_response.get("refresh_token"):
                     self._refresh_token = auth_response["refresh_token"]
 
-                expires_in = auth_response["expires_in"]
-                self._token_expiration = datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
+                self._token_expiration = self._expiry_from(auth_response)
 
                 _LOGGER.debug("Token refreshed successfully")
 
@@ -178,6 +224,7 @@ class FloAPI:
 
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"Bearer {self._access_token}"
+        headers.setdefault("User-Agent", USER_AGENT)
 
         if "timeout" not in kwargs:
             kwargs["timeout"] = ClientTimeout(total=20)

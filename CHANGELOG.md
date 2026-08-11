@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-08-10
+
+### Changed
+- **api.py — new Moen login flow.** Moen migrated Flo accounts onto the
+  Cognito-backed "Smart Water" gateway (`api.prod.iot.moen.com`). The old
+  `api-gw.meetflo.com` OAuth2 *password* grant no longer authenticates
+  migrated accounts, which left the integration unable to log in. Login now
+  posts the username/password to the Moen gateway
+  (`POST https://api.prod.iot.moen.com/v1/oauth2/token`,
+  `grant_type=client_credentials`, new app `client_id`) and uses the Bearer
+  token it returns. The legacy Flo v2 data/control endpoints (valve,
+  systemMode, health test, presence, consumption, device/location reads) are
+  unchanged and still accept this token, so entities and services behave
+  exactly as before.
+- Token refresh now targets the same Moen gateway
+  (`grant_type=refresh_token`).
+
+### Added
+- The Moen token no longer embeds the Flo user id, so after login the client
+  resolves it from the account email (mirrors the app's
+  `getUserDetails(email)`), then continues to use the existing
+  `/v2/users/{id}?expand=locations` discovery path.
+- Every Flo request now sends `User-Agent: Flo-Android`, matching the app
+  (some endpoints reject an unknown User-Agent).
+
+### Notes
+- Credentials/flow were extracted from the Moen Android app
+  (`com.moen.smartwater` v3.56.x). These are Moen-controlled values and may
+  change; if login breaks again, the client id / token URL are the first
+  things to re-check.
+
 ## [1.1.1] - 2026-04-30
 
 ### Fixed
