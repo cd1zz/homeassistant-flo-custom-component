@@ -5,6 +5,11 @@
 
 Custom component for Home Assistant that adds **OAuth2 support** for Flo by Moen smart water monitoring and shutoff devices.
 
+> ### ⚠️ v1.2.0 — Moen "Smart Water" app migration
+> Moen has migrated Flo accounts to the new **Moen Smart Water** app (formerly the standalone Flo app) and cut accounts over to a new Cognito-backed login gateway. The previous login stopped working for migrated accounts. **v1.2.0 switches to the new authentication flow.**
+>
+> **What you need to do:** make sure your account works in the current **Moen Smart Water** mobile app (install it, log in, reset your password if prompted), then update this integration to **v1.2.0+**. If your account hasn't been migrated by Moen yet, log in through the new app once first.
+
 ## Quick Start
 
 1. **Install** via HACS or manual installation (see below)
@@ -13,9 +18,9 @@ Custom component for Home Assistant that adds **OAuth2 support** for Flo by Moen
 
 ## Why This Custom Component?
 
-**Moen changed their API from simple authentication to OAuth2 in late 2024/early 2025**, breaking the built-in Home Assistant integration. This custom component:
+**Moen changed their API from simple authentication to OAuth2 in late 2024/early 2025**, breaking the built-in Home Assistant integration. Then in **2026 Moen migrated Flo accounts to the new "Moen Smart Water" app** and a Cognito-backed login gateway, breaking authentication again. This custom component keeps up with those changes:
 
-✅ Supports the **new OAuth2 authentication flow**
+✅ Supports the **current Moen login flow** (Cognito gateway, as of v1.2.0)
 ✅ Works with current Moen API endpoints
 ✅ Maintains all original integration features
 ✅ Automatically refreshes tokens
@@ -106,7 +111,7 @@ Configuration → Settings → Logs → Filter: "flo"
 
 You should see:
 ```
-Authentication successful, token expires in 86400 seconds
+Authentication successful for Flo user <your-user-id>
 ```
 
 ## Supported Devices
@@ -157,7 +162,7 @@ Run system health test on the device
 
 ### Authentication Fails
 
-1. Verify credentials work in Moen mobile app
+1. **Verify your credentials work in the current _Moen Smart Water_ app.** Since the 2026 migration, login goes through Moen's new gateway — an account that hasn't been migrated (or whose password wasn't reset after migration) will fail here. Log in through the app once, resetting your password if prompted, then retry.
 2. Check Home Assistant logs for detailed error
 3. Ensure internet connectivity
 4. Try removing and re-adding integration
@@ -191,33 +196,47 @@ Then restart and check logs: **Settings → System → Logs**
 
 ## Technical Details
 
-### OAuth2 Flow
+### Authentication Flow (v1.2.0+)
 
-This integration uses **OAuth2 Password Grant** flow:
+Since the 2026 migration, login goes through Moen's Cognito-backed gateway:
 
 1. User provides username/password
-2. Integration exchanges credentials for access_token + refresh_token
-3. Access tokens expire in 24 hours
-4. Integration auto-refreshes 5 minutes before expiry
-5. Refresh tokens are long-lived (~92 years)
+2. Integration posts them to the Moen gateway token endpoint and receives an
+   `access_token` + `refresh_token` (the tokens are nested under a `token`
+   object in the response)
+3. Access tokens expire in ~1 hour
+4. Integration auto-refreshes 5 minutes before expiry (`grant_type=refresh_token`)
+5. The Moen token is used as a `Bearer` token against the **unchanged** Flo v2
+   API for all data and control calls
 
 ### API Endpoints
 
 ```
-Authentication:  POST /api/v1/oauth2/token
-User Info:       GET  /api/v2/users/{id}?expand=locations
-Device Info:     GET  /api/v2/devices/{id}
-Valve Control:   POST /api/v2/devices/{id}
-Location Modes:  POST /api/v2/locations/{id}/systemMode
+Authentication:  POST https://api.prod.iot.moen.com/v1/oauth2/token
+Refresh:         POST https://api.prod.iot.moen.com/v1/oauth2/token   (grant_type=refresh_token)
+User id:         GET  https://api-gw.meetflo.com/api/v2/moen/sync/me   (.id)
+Discovery:       GET  https://api-gw.meetflo.com/api/v2/locations?userId={id}&expand=devices
+Device Info:     GET  https://api-gw.meetflo.com/api/v2/devices/{id}
+Valve Control:   POST https://api-gw.meetflo.com/api/v2/devices/{id}
+Location Modes:  POST https://api-gw.meetflo.com/api/v2/locations/{id}/systemMode
 ```
+
+> **Note:** the older `POST /api/v1/oauth2/token` on `api-gw.meetflo.com`
+> (password grant) and `GET /api/v2/users/{id}?expand=locations` no longer work
+> for migrated accounts — the gateway token is rejected (403) on the latter.
 
 ### Client Credentials
 
-OAuth2 client credentials (extracted from Moen mobile app):
-- `client_id`: `3baec26f-0e8b-4e1d-84b0-e178f05ea0a5`
-- `client_secret`: `3baec26f-0e8b-4e1d-84b0-e178f05ea0a5`
+Login credentials for the Moen gateway (extracted from the Moen Smart Water
+app, package `com.moen.smartwater`):
+- token URL: `https://api.prod.iot.moen.com/v1/oauth2/token`
+- `client_id`: `6qn9pep31dglq6ed4fvlq6rp5t`
+- `grant_type`: `client_credentials` (carries username/password; no client
+  secret is sent for this flow)
 
-These are hardcoded in the integration and may need updating if Moen rotates them.
+These are hardcoded in the integration and may need updating if Moen rotates
+them — the `client_id` and token URL are the first things to check if login
+breaks again.
 
 ## Differences from Built-in Integration
 
@@ -266,9 +285,8 @@ Apache License 2.0 - Same as Home Assistant Core
 
 ## Credits
 
-- **Reverse Engineering**: OAuth2 flow captured from Moen mobile app
+- **Reverse Engineering**: auth flow captured from the Moen mobile app (OAuth2 originally; Cognito gateway flow decompiled from the Moen Smart Water app for the 2026 migration)
 - **Original Integration**: Home Assistant Core team
-- **OAuth2 Implementation**: Based on API traffic analysis
 
 ## Support
 
