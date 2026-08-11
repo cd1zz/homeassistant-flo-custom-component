@@ -14,23 +14,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   migrated accounts, which left the integration unable to log in. Login now
   posts the username/password to the Moen gateway
   (`POST https://api.prod.iot.moen.com/v1/oauth2/token`,
-  `grant_type=client_credentials`, new app `client_id`) and uses the Bearer
-  token it returns. The legacy Flo v2 data/control endpoints (valve,
-  systemMode, health test, presence, consumption, device/location reads) are
-  unchanged and still accept this token, so entities and services behave
-  exactly as before.
+  `grant_type=client_credentials`, new app `client_id`). The response wraps
+  the tokens under a `token` object; we read the Bearer `access_token` from
+  there. The legacy Flo v2 data/control endpoints (valve, systemMode, health
+  test, presence, consumption, device/location reads) are unchanged and still
+  accept this token, so entities and services behave exactly as before.
 - Token refresh now targets the same Moen gateway
   (`grant_type=refresh_token`).
+- **Discovery** no longer uses `/v2/users/{id}?expand=locations` (returns 403
+  for the gateway token). It now resolves the Flo user id from
+  `GET /v2/moen/sync/me` (`.id` — the token-scoped user the app itself uses)
+  and lists devices via `GET /v2/locations?userId=...&expand=devices`.
 
 ### Added
-- The Moen token no longer embeds the Flo user id, so after login the client
-  resolves it from the account email (mirrors the app's
-  `getUserDetails(email)`), then continues to use the existing
-  `/v2/users/{id}?expand=locations` discovery path.
+- `FloAPI.get_locations()` — the new discovery call described above; replaces
+  `get_user_info(include_locations=True)` in setup.
 - Every Flo request now sends `User-Agent: Flo-Android`, matching the app
   (some endpoints reject an unknown User-Agent).
 
 ### Notes
+- Verified end to end against a migrated account (login → sync/me user id →
+  location/device discovery → device read → consumption).
 - Credentials/flow were extracted from the Moen Android app
   (`com.moen.smartwater` v3.56.x). These are Moen-controlled values and may
   change; if login breaks again, the client id / token URL are the first

@@ -75,10 +75,25 @@ class FloAPI:
         return self._user_id
 
     @staticmethod
-    def _expiry_from(auth_response: dict[str, Any]) -> datetime:
+    def _token_payload(auth_response: dict[str, Any]) -> dict[str, Any]:
+        """Return the object that actually carries the tokens.
+
+        The Moen gateway wraps them under a ``token`` key
+        (``{"token": {"access_token": ...}}``); tolerate a flat shape too so a
+        future change on their side doesn't break us outright.
+        """
+        if isinstance(auth_response, dict):
+            token = auth_response.get("token")
+            if isinstance(token, dict):
+                return token
+            return auth_response
+        return {}
+
+    @staticmethod
+    def _expiry_from(tokens: dict[str, Any]) -> datetime:
         """Return the token expiry, tolerating ``expires_in`` as str or int."""
         try:
-            expires_in = int(auth_response.get("expires_in", 3600))
+            expires_in = int(tokens.get("expires_in", 3600))
         except (TypeError, ValueError):
             expires_in = 3600
         return datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
@@ -108,9 +123,10 @@ class FloAPI:
                 resp.raise_for_status()
                 auth_response = await resp.json()
 
-                self._access_token = auth_response["access_token"]
-                self._refresh_token = auth_response.get("refresh_token")
-                self._token_expiration = self._expiry_from(auth_response)
+                tokens = self._token_payload(auth_response)
+                self._access_token = tokens["access_token"]
+                self._refresh_token = tokens.get("refresh_token")
+                self._token_expiration = self._expiry_from(tokens)
 
         except ClientError as err:
             _LOGGER.error("Authentication failed: %s", err)
@@ -123,26 +139,44 @@ class FloAPI:
         _LOGGER.debug("Authentication successful for Flo user %s", self._user_id)
 
     async def _resolve_user_id(self) -> None:
-        """Resolve the Flo user id from the account email.
+        """Resolve the Flo user id for the authenticated (migrated) account.
 
-        Mirrors the Moen app's ``getUserDetails(email)`` call. Uses a
-        non-retrying request so a rejected token surfaces as an auth error
-        instead of recursing back into :meth:`authenticate`.
+        The Moen token no longer embeds the Flo user id. The app resolves it
+        via ``GET /v2/moen/sync/me`` (``FloViewModel.getUserId`` reads the
+        ``id`` field) — this returns the *token-scoped* Flo user, which is the
+        id the rest of the Flo API (``/locations?userId=`` etc.) authorizes
+        against. A lookup by email returns a different record that the API
+        rejects with 403, so ``sync/me`` is the source of truth; the email
+        lookup is only a last-ditch fallback.
+
+        Uses non-retrying requests so a rejected token surfaces as an auth
+        error instead of recursing back into :meth:`authenticate`.
         """
+        user_id = None
         try:
             resp = await self._request_with_retry(
-                "get", "/users", _retry=False, params={"email": self._username}
+                "get", "/moen/sync/me", _retry=False
             )
+            if isinstance(resp, dict):
+                user_id = resp.get("id")
         except FloRequestError as err:
-            raise FloAuthError(f"Could not resolve Flo user id: {err}") from err
+            _LOGGER.debug("sync/me user-id lookup failed (%s); trying email", err)
 
-        if isinstance(resp, list):
-            user = resp[0] if resp else None
-        else:
-            user = resp
-        user_id = user.get("id") if isinstance(user, dict) else None
         if not user_id:
-            raise FloAuthError("Could not resolve Flo user id from account email")
+            try:
+                resp = await self._request_with_retry(
+                    "get", "/users", _retry=False, params={"email": self._username}
+                )
+            except FloRequestError as err:
+                raise FloAuthError(f"Could not resolve Flo user id: {err}") from err
+            if isinstance(resp, list):
+                user = resp[0] if resp else None
+            else:
+                user = resp
+            user_id = user.get("id") if isinstance(user, dict) else None
+
+        if not user_id:
+            raise FloAuthError("Could not resolve Flo user id for the account")
         self._user_id = user_id
 
     async def refresh_access_token(self) -> None:
@@ -169,12 +203,13 @@ class FloAPI:
                 resp.raise_for_status()
                 auth_response = await resp.json()
 
-                self._access_token = auth_response["access_token"]
+                tokens = self._token_payload(auth_response)
+                self._access_token = tokens["access_token"]
                 # Refresh token might be rotated
-                if auth_response.get("refresh_token"):
-                    self._refresh_token = auth_response["refresh_token"]
+                if tokens.get("refresh_token"):
+                    self._refresh_token = tokens["refresh_token"]
 
-                self._token_expiration = self._expiry_from(auth_response)
+                self._token_expiration = self._expiry_from(tokens)
 
                 _LOGGER.debug("Token refreshed successfully")
 
@@ -275,22 +310,24 @@ class FloAPI:
             _LOGGER.error("Request to %s failed: %s", url, err)
             raise FloRequestError(f"Request failed: {err}") from err
 
-    async def get_user_info(
-        self, include_locations: bool = True, include_alarm_settings: bool = False
-    ) -> dict[str, Any]:
-        """Get user information."""
-        params = {}
-        expand_list = []
+    async def get_locations(self) -> list[dict[str, Any]]:
+        """Return the account's locations, each with its devices expanded.
 
-        if include_locations:
-            expand_list.append("locations")
-        if include_alarm_settings:
-            expand_list.append("alarmSettings")
-
-        if expand_list:
-            params["expand"] = ",".join(expand_list)
-
-        return await self.request("get", f"/users/{self.user_id}", params=params)
+        Uses ``GET /v2/locations?userId=...&expand=devices`` (the Moen app's
+        ``getLocationByUserId``). The old ``/v2/users/{id}?expand=locations``
+        path returns 403 for the Cognito-gateway token, so we discover through
+        the locations endpoint instead. The response is ``{"items": [...]}``.
+        """
+        resp = await self.request(
+            "get",
+            "/locations",
+            params={"userId": self.user_id, "expand": "devices"},
+        )
+        if isinstance(resp, dict):
+            return resp.get("items", []) or []
+        if isinstance(resp, list):
+            return resp
+        return []
 
     async def get_device_info(self, device_id: str) -> dict[str, Any]:
         """Get device information."""
