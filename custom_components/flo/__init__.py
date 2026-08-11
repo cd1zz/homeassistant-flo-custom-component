@@ -34,7 +34,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FloConfigEntry) -> bool:
         raise ConfigEntryNotReady from err
 
     try:
-        user_info = await client.get_user_info(include_locations=True)
+        account_locations = await client.get_locations()
     except FloAuthError as err:
         raise ConfigEntryAuthFailed from err
     except FloRequestError as err:
@@ -42,7 +42,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FloConfigEntry) -> bool:
 
     locations: list[FloLocationDataUpdateCoordinator] = []
     devices: list[FloDeviceDataUpdateCoordinator] = []
-    for location in user_info["locations"]:
+    for location in account_locations:
         device_ids = [device["id"] for device in location["devices"]]
         if not device_ids:
             continue
