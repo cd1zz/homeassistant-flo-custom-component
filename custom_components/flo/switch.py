@@ -75,7 +75,7 @@ class FloSwitch(FloEntity, SwitchEntity):
     def __init__(self, device: FloDeviceDataUpdateCoordinator) -> None:
         """Initialize the Flo switch."""
         super().__init__("shutoff_valve", device)
-        self._attr_is_on = device.last_known_valve_state == "open"
+        self._attr_is_on = self._compute_is_on()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Open the valve."""
@@ -91,10 +91,26 @@ class FloSwitch(FloEntity, SwitchEntity):
         self.async_write_ha_state()
         await self._device.async_request_refresh()
 
+    def _compute_is_on(self) -> bool:
+        """Return whether the valve should read as open.
+
+        The Moen Flo API exposes two valve fields: ``lastKnown`` (last reported physical
+        state of the device, which lags a command by up to a poll cycle) and ``target``
+        (the state the cloud was last told to reach, which updates immediately). Reading
+        ``lastKnown`` right after a command makes the switch briefly snap back to its old
+        state on the post-command refresh, because the device hasn't reported the move yet.
+        Prefer ``target`` so the switch reflects the commanded state until the device confirms
+        it, falling back to ``lastKnown`` if ``target`` is missing.
+        """
+        target = self._device.target_valve_state
+        if target in ("open", "closed"):
+            return target == "open"
+        return self._device.last_known_valve_state == "open"
+
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        self._attr_is_on = self._device.last_known_valve_state == "open"
+        self._attr_is_on = self._compute_is_on()
         super()._handle_coordinator_update()
 
     async def async_set_mode_home(self):
