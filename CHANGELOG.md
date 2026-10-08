@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-10-08
+
+### Fixed
+- **api.py**: a network failure during login no longer forces a reauth.
+  `authenticate()` mapped every aiohttp `ClientError` — including DNS and
+  connection failures — to `FloAuthError`, which `async_setup_entry` raises as
+  `ConfigEntryAuthFailed`. If the network wasn't ready when Home Assistant
+  started, the entry landed in `setup_error` with a reauth prompt and never
+  retried, leaving every Flo entity unavailable until a manual reload.
+  Transport errors, timeouts and 5xx responses from the Moen gateway now raise
+  `FloRequestError` (→ `ConfigEntryNotReady`, retried automatically); only 4xx
+  responses are treated as bad credentials. `FloRequestError` now carries the
+  HTTP `status` (`None` for transport failures) so the user-id fallback can
+  tell the two apart. Request timeouts are also caught alongside `ClientError`.
+
 ## [1.2.1] - 2026-08-12
 
 ### Fixed
