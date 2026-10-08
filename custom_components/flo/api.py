@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any
 
-from aiohttp import ClientError, ClientSession, ClientTimeout
+from aiohttp import ClientError, ClientResponseError, ClientSession, ClientTimeout
 
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -46,7 +46,15 @@ class FloAuthError(HomeAssistantError):
 
 
 class FloRequestError(HomeAssistantError):
-    """Request error."""
+    """Request error.
+
+    ``status`` is the HTTP status when the server answered, or ``None`` for a
+    transport failure (DNS, connection refused, timeout).
+    """
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class FloAPI:
@@ -128,9 +136,20 @@ class FloAPI:
                 self._refresh_token = tokens.get("refresh_token")
                 self._token_expiration = self._expiry_from(tokens)
 
-        except ClientError as err:
+        except ClientResponseError as err:
+            if err.status >= 500:
+                _LOGGER.warning("Moen gateway unavailable: %s", err)
+                raise FloRequestError(
+                    f"Moen gateway unavailable: {err}", err.status
+                ) from err
             _LOGGER.error("Authentication failed: %s", err)
             raise FloAuthError(f"Authentication failed: {err}") from err
+        except (ClientError, TimeoutError) as err:
+            # Network/DNS trouble (e.g. right after a restart) is not a bad
+            # password; raise a request error so HA retries instead of
+            # demanding reauth.
+            _LOGGER.warning("Cannot reach Moen gateway: %s", err)
+            raise FloRequestError(f"Cannot reach Moen gateway: {err}") from err
         except KeyError as err:
             _LOGGER.error("Invalid authentication response: %s", err)
             raise FloAuthError(f"Invalid authentication response: {err}") from err
@@ -168,6 +187,8 @@ class FloAPI:
                     "get", "/users", _retry=False, params={"email": self._username}
                 )
             except FloRequestError as err:
+                if err.status is None or err.status >= 500:
+                    raise
                 raise FloAuthError(f"Could not resolve Flo user id: {err}") from err
             if isinstance(resp, list):
                 user = resp[0] if resp else None
@@ -213,7 +234,7 @@ class FloAPI:
 
                 _LOGGER.debug("Token refreshed successfully")
 
-        except (ClientError, KeyError) as err:
+        except (ClientError, TimeoutError, KeyError) as err:
             _LOGGER.warning("Token refresh failed (%s); re-authenticating", err)
             # If refresh fails (revoked refresh token, malformed response, ...),
             # fall back to a full re-auth. Let any FloAuthError propagate so the
@@ -297,7 +318,7 @@ class FloAPI:
                         body,
                     )
                     raise FloRequestError(
-                        f"Request failed: {resp.status} {body}"
+                        f"Request failed: {resp.status} {body}", resp.status
                     )
                 # Mode-change endpoints (e.g. POST /locations/{id}/systemMode)
                 # return 204 with an empty body — resp.json() would raise
@@ -306,7 +327,7 @@ class FloAPI:
                     return {}
                 return await resp.json()
 
-        except ClientError as err:
+        except (ClientError, TimeoutError) as err:
             _LOGGER.error("Request to %s failed: %s", url, err)
             raise FloRequestError(f"Request failed: {err}") from err
 
