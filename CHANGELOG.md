@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] - 2026-11-09
+
+### Fixed
+- **switch.py**: the shutoff-valve switch now reports valve closures made by the
+  device itself. Since 1.2.1 the switch read `valve.target` first, which is only
+  changed by commands (app, API, Home Assistant). When the Flo shuts the valve on
+  its own — an automatic shutoff after a leak or unusual-activity alert —
+  `target` stays `open` and only `valve.lastKnown` moves to `closed`, so the
+  switch kept reporting the water as on for the whole outage. `lastKnown` is
+  now the source of truth. The flip-back fix from 1.2.1 is preserved by
+  remembering a command issued from Home Assistant for a 90 second grace period
+  (`COMMAND_GRACE_PERIOD`) and reporting the commanded state until the device
+  confirms it or the grace period runs out. `inTransition`/missing `lastKnown`
+  keeps the current reading instead of guessing.
+
 ## [1.2.2] - 2026-10-08
 
 ### Fixed

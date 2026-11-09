@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -10,6 +11,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .const import FLO_AWAY, FLO_HOME
 from .coordinator import FloConfigEntry, FloDeviceDataUpdateCoordinator
@@ -27,6 +29,11 @@ SERVICE_SET_SLEEP_MODE = "set_sleep_mode"
 SERVICE_SET_AWAY_MODE = "set_away_mode"
 SERVICE_SET_HOME_MODE = "set_home_mode"
 SERVICE_RUN_HEALTH_TEST = "run_health_test"
+
+# How long after a command issued from Home Assistant the switch keeps showing the
+# commanded state while waiting for the device to report the move. Slightly more
+# than one 60 second poll cycle.
+COMMAND_GRACE_PERIOD = timedelta(seconds=90)
 
 
 async def async_setup_entry(
@@ -75,11 +82,14 @@ class FloSwitch(FloEntity, SwitchEntity):
     def __init__(self, device: FloDeviceDataUpdateCoordinator) -> None:
         """Initialize the Flo switch."""
         super().__init__("shutoff_valve", device)
+        self._pending_target: str | None = None
+        self._pending_until: datetime | None = None
         self._attr_is_on = self._compute_is_on()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Open the valve."""
         await self._device.api_client.set_valve_state(self._device.id, "open")
+        self._start_command_grace("open")
         self._attr_is_on = True
         self.async_write_ha_state()
         await self._device.async_request_refresh()
@@ -87,25 +97,54 @@ class FloSwitch(FloEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Close the valve."""
         await self._device.api_client.set_valve_state(self._device.id, "closed")
+        self._start_command_grace("closed")
         self._attr_is_on = False
         self.async_write_ha_state()
         await self._device.async_request_refresh()
 
+    def _start_command_grace(self, target: str) -> None:
+        """Remember a command we just sent so the next poll can't undo it."""
+        self._pending_target = target
+        self._pending_until = dt_util.utcnow() + COMMAND_GRACE_PERIOD
+
     def _compute_is_on(self) -> bool:
         """Return whether the valve should read as open.
 
-        The Moen Flo API exposes two valve fields: ``lastKnown`` (last reported physical
-        state of the device, which lags a command by up to a poll cycle) and ``target``
-        (the state the cloud was last told to reach, which updates immediately). Reading
-        ``lastKnown`` right after a command makes the switch briefly snap back to its old
-        state on the post-command refresh, because the device hasn't reported the move yet.
-        Prefer ``target`` so the switch reflects the commanded state until the device confirms
-        it, falling back to ``lastKnown`` if ``target`` is missing.
+        The Moen Flo API exposes two valve fields: ``lastKnown`` (the physical state
+        the device last reported) and ``target`` (the state the cloud was last told to
+        reach). ``lastKnown`` is the source of truth: it is the only field that moves
+        when the device closes the valve on its own, e.g. an automatic shutoff after a
+        leak or unusual-activity alert. ``target`` stays at ``open`` through such an
+        event, so a switch driven by ``target`` keeps reporting the water as on while
+        it is actually shut off.
+
+        The one place ``lastKnown`` misleads is right after a command sent from Home
+        Assistant: ``target`` flips immediately but ``lastKnown`` lags by up to a poll
+        cycle, so the post-command refresh would briefly snap the switch back. To cover
+        that, a command issued here is remembered for :data:`COMMAND_GRACE_PERIOD` and
+        wins until the device confirms it or the grace period runs out.
         """
-        target = self._device.target_valve_state
-        if target in ("open", "closed"):
-            return target == "open"
-        return self._device.last_known_valve_state == "open"
+        last_known = self._device.last_known_valve_state
+
+        if self._pending_target is not None:
+            confirmed = last_known == self._pending_target
+            expired = (
+                self._pending_until is None or dt_util.utcnow() >= self._pending_until
+            )
+            if confirmed or expired:
+                self._pending_target = None
+                self._pending_until = None
+            else:
+                return self._pending_target == "open"
+
+        if last_known in ("open", "closed"):
+            return last_known == "open"
+
+        # ``inTransition`` or missing: keep the current reading if we have one,
+        # otherwise fall back to the commanded state.
+        if self._attr_is_on is not None:
+            return bool(self._attr_is_on)
+        return self._device.target_valve_state == "open"
 
     @callback
     def _handle_coordinator_update(self) -> None:
