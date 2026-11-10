@@ -136,3 +136,4 @@ Thumbs.db
 
 # Ad-hoc test scripts in the repo root (real tests live in tests/)
 /test_*.py
+tools/test_*.py
