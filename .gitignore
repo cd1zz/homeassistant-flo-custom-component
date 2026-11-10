@@ -134,6 +134,6 @@ Thumbs.db
 *.db-shm
 *.db-wal
 
-# Test files
-test_*.py
-tests/
+# Ad-hoc test scripts in the repo root (real tests live in tests/)
+/test_*.py
+tools/test_*.py
